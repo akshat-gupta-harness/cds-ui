@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PURL compare</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <header>
+      <p class="kicker">CDS QA · Qwiet prod</p>
+      <h1>PURL compare</h1>
+      <p class="lede">Fetch live <code>package_info</code> for one PURL and show what differs. Keys stay in <code>.env</code>.</p>
+    </header>
+
+    <form id="form">
+      <label class="purl-label" for="purl">Package URL</label>
+      <div class="purl-row">
+        <input id="purl" name="purl" autocomplete="off" spellcheck="false" placeholder="pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@9.0.45" autofocus />
+        <button type="submit" id="go">Compare</button>
+      </div>
+      <div class="examples">
+        <button type="button" data-purl="pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@9.0.45">tomcat-embed-core@9.0.45</button>
+        <button type="button" data-purl="pkg:pypi/h2o@3.46.0.8">h2o@3.46.0.8</button>
+      </div>
+      <fieldset>
+        <legend>Same flags sent to both</legend>
+        <label><input type="checkbox" name="include_latest_version" checked /> latest version</label>
+        <label><input type="checkbox" name="include_eol" checked /> eol</label>
+        <label><input type="checkbox" name="include_dependency_graph" checked /> dependency graph</label>
+        <label><input type="checkbox" name="include_package_score" checked /> package score</label>
+        <label><input type="checkbox" name="refresh_cache" /> refresh cache</label>
+        <label><input type="checkbox" name="refresh_package_score" /> refresh score</label>
+      </fieldset>
+    </form>
+
+    <p id="status" role="status"></p>
+    <main id="out" hidden></main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
