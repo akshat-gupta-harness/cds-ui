@@ -4,6 +4,10 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
+    "compare:qwiet": "node scripts/compare-mongo-qwiet.mjs",
     "test": "node --test"
+  },
+  "dependencies": {
+    "mongodb": "^7.6.0"
   }
 }

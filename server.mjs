@@ -1,9 +1,12 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { diffValues, pickPackage } from "./lib/diff.mjs";
+import { loadEnv } from "./lib/env.mjs";
+import { cleanDoc, cveIds, packageCveIds, vulnerabilityIds } from "./lib/enrichment.mjs";
+import { loadEnrichment } from "./lib/mongo.mjs";
+import { callQwiet } from "./lib/upstream.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, "public");
@@ -13,6 +16,8 @@ loadEnv(path.join(root, ".env"));
 const port = Number(process.env.PORT || 4173);
 const cdsURL = process.env.CDS_URL;
 const qwietURL = process.env.QWIET_URL;
+const V1_COLLECTION = "componentEnrichment";
+const V2_COLLECTION = "componentEnrichmentV2";
 const FLAG_NAMES = [
   "include_latest_version",
   "include_eol",
@@ -45,12 +50,6 @@ server.listen(port, "127.0.0.1", () => {
 });
 
 async function compare(req, res) {
-  const missing = ["CDS_URL", "CDS_API_KEY", "QWIET_URL", "QWIET_TOKEN"].filter((key) => !process.env[key]);
-  if (missing.length) {
-    sendJSON(res, 500, { error: `missing ${missing.join(", ")} in .env` });
-    return;
-  }
-
   const raw = await readBody(req);
   let payload;
   try {
@@ -66,94 +65,79 @@ async function compare(req, res) {
     return;
   }
 
+  const wantV1 = payload.v1 !== false;
+  const wantV2 = payload.v2 !== false;
+  const wantCds = Boolean(payload.cds);
+  const wantQwiet = Boolean(payload.qwiet);
+  if (!wantV1 && !wantV2 && !wantCds && !wantQwiet) {
+    sendJSON(res, 400, { error: "pick at least one source" });
+    return;
+  }
+  const missing = [];
+  if ((wantV1 || wantV2) && !process.env.MONGO_URI) missing.push("MONGO_URI");
+  if (wantCds) missing.push(...["CDS_URL", "CDS_API_KEY"].filter((key) => !process.env[key]));
+  if (wantQwiet) missing.push(...["QWIET_URL", "QWIET_TOKEN"].filter((key) => !process.env[key]));
+  if (missing.length) {
+    sendJSON(res, 500, { error: `missing ${missing.join(", ")} in .env` });
+    return;
+  }
+
   const flags = {};
   for (const name of FLAG_NAMES) flags[name] = Boolean(payload.flags?.[name]);
 
-  const [cds, qwiet] = await Promise.all([
-    callUpstream(cdsURL, flags, purl, {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      "x-api-key": process.env.CDS_API_KEY,
-    }),
-    callUpstream(qwietURL, flags, purl, {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      "X-Harness-Token": process.env.QWIET_TOKEN,
-      ...(process.env.QWIET_COOKIE ? { Cookie: process.env.QWIET_COOKIE } : {}),
-    }),
+  const [v1, v2, cds, qwiet] = await Promise.all([
+    wantV1 ? loadEnrichmentForApi(V1_COLLECTION, purl) : null,
+    wantV2 ? loadEnrichmentForApi(V2_COLLECTION, purl) : null,
+    wantCds
+      ? callQwiet(cdsURL, flags, purl, {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "x-api-key": process.env.CDS_API_KEY,
+        })
+      : null,
+    wantQwiet
+      ? callQwiet(qwietURL, flags, purl, {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "X-Harness-Token": process.env.QWIET_TOKEN,
+          ...(process.env.QWIET_COOKIE ? { Cookie: process.env.QWIET_COOKIE } : {}),
+        })
+      : null,
   ]);
+  const cdsPackage = cds?.body == null ? null : pickPackage(cds.body, purl);
+  const qwietPackage = qwiet?.body == null ? null : pickPackage(qwiet.body, purl);
+  const diffs = v1?.body != null && v2?.body != null ? diffValues(v1.body, v2.body) : null;
 
-  const cdsPackage = cds.body == null ? null : pickPackage(cds.body, purl);
-  const qwietPackage = qwiet.body == null ? null : pickPackage(qwiet.body, purl);
-  const diffs = cdsPackage != null && qwietPackage != null ? diffValues(cdsPackage, qwietPackage) : null;
-
-  sendJSON(res, 200, { purl, flags, cds, qwiet, cdsPackage, qwietPackage, diffs });
-}
-
-async function callUpstream(base, flags, purl, headers) {
-  const url = new URL(base);
-  for (const [name, on] of Object.entries(flags)) {
-    if (on) url.searchParams.set(name, "true");
-  }
-  const started = performance.now();
-  try {
-    // ponytail: Node fetch fails here with UNABLE_TO_GET_ISSUER_CERT_LOCALLY;
-    // curl uses the macOS trust store and succeeds. Upgrade: switch back to
-    // fetch once Node trusts the same issuers.
-    const response = await curlPost(url, headers, JSON.stringify({ purls: [purl] }));
-    let body = response.text;
-    try {
-      body = JSON.parse(response.text);
-    } catch {
-      body = { raw: response.text.slice(0, 4000) };
-    }
-    return {
-      ok: response.status >= 200 && response.status < 300,
-      status: response.status,
-      ms: Math.round(performance.now() - started),
-      body,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      status: 0,
-      ms: Math.round(performance.now() - started),
-      error: err instanceof Error ? err.message : "request failed",
-      body: null,
-    };
-  }
-}
-
-function curlPost(url, headers, body) {
-  const args = ["-sS", "--max-time", "180", "-X", "POST", "-w", "\n__CDS_UI_STATUS__%{http_code}", String(url)];
-  for (const [key, value] of Object.entries(headers)) {
-    if (/[\r\n]/.test(key) || /[\r\n]/.test(value)) throw new Error("invalid header");
-    args.push("-H", `${key}: ${value}`);
-  }
-  args.push("--data-binary", "@-");
-  return new Promise((resolve, reject) => {
-    const child = spawn("curl", args, { stdio: ["pipe", "pipe", "pipe"] });
-    const stdout = [];
-    const stderr = [];
-    child.stdout.on("data", (chunk) => stdout.push(chunk));
-    child.stderr.on("data", (chunk) => stderr.push(chunk));
-    child.on("error", reject);
-    child.stdin.end(body);
-    child.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `curl exited ${code}`));
-        return;
-      }
-      const text = Buffer.concat(stdout).toString("utf8");
-      const marker = "\n__CDS_UI_STATUS__";
-      const at = text.lastIndexOf(marker);
-      if (at < 0) {
-        reject(new Error("curl response missing status"));
-        return;
-      }
-      resolve({ status: Number(text.slice(at + marker.length)), text: text.slice(0, at) });
-    });
+  sendJSON(res, 200, {
+    purl,
+    flags,
+    v1,
+    v2,
+    diffs,
+    cds,
+    qwiet,
+    cdsPackage,
+    qwietPackage,
+    ids: {
+      v1: wantV1 ? vulnerabilityIds(v1.body) : null,
+      v2: wantV2 ? vulnerabilityIds(v2.body) : null,
+      v1Cve: wantV1 ? cveIds(v1.body) : null,
+      v2Cve: wantV2 ? cveIds(v2.body) : null,
+      cds: wantCds ? packageCveIds(cdsPackage) : null,
+      qwiet: wantQwiet ? packageCveIds(qwietPackage) : null,
+    },
   });
+}
+
+async function loadEnrichmentForApi(collection, purl) {
+  const result = await loadEnrichment(collection, purl);
+  if (!result.ok) return result;
+  const modified = Number(result.body?.lastmodifiedat);
+  return {
+    ...result,
+    lastModifiedAt: Number.isFinite(modified) ? modified : null,
+    body: result.body ? cleanDoc(result.body) : null,
+  };
 }
 
 function serveStatic(pathname, res) {
@@ -202,18 +186,3 @@ function sendJSON(res, status, body) {
   res.end(json);
 }
 
-function loadEnv(file) {
-  if (!fs.existsSync(file)) return;
-  for (const line of fs.readFileSync(file, "utf8").split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq < 0) continue;
-    const key = trimmed.slice(0, eq).trim();
-    let value = trimmed.slice(eq + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (process.env[key] === undefined) process.env[key] = value;
-  }
-}

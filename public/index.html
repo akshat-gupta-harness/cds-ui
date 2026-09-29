@@ -8,9 +8,9 @@
   </head>
   <body>
     <header>
-      <p class="kicker">CDS QA · Qwiet prod</p>
+      <p class="kicker">componentEnrichment · componentEnrichmentV2</p>
       <h1>PURL compare</h1>
-      <p class="lede">Fetch live <code>package_info</code> for one PURL and show what differs. Keys stay in <code>.env</code>.</p>
+      <p class="lede">Fetch one PURL and show what differs. Mongo v1, Mongo v2, Qwiet, and CDS are each optional. Keys stay in <code>.env</code>.</p>
     </header>
 
     <form id="form">
@@ -21,10 +21,18 @@
       </div>
       <div class="examples">
         <button type="button" data-purl="pkg:maven/org.apache.tomcat.embed/tomcat-embed-core@9.0.45">tomcat-embed-core@9.0.45</button>
+        <button type="button" data-purl="pkg:golang/stdlib@1.26.1">stdlib@1.26.1</button>
         <button type="button" data-purl="pkg:pypi/h2o@3.46.0.8">h2o@3.46.0.8</button>
       </div>
       <fieldset>
-        <legend>Same flags sent to both</legend>
+        <legend>Sources</legend>
+        <label><input type="checkbox" name="v1" checked /> Mongo v1</label>
+        <label><input type="checkbox" name="v2" checked /> Mongo v2</label>
+        <label><input type="checkbox" name="qwiet" /> Qwiet prod (v1 source)</label>
+        <label><input type="checkbox" name="cds" /> CDS QA (v2 source)</label>
+      </fieldset>
+      <fieldset id="flags">
+        <legend>Live request flags</legend>
         <label><input type="checkbox" name="include_latest_version" checked /> latest version</label>
         <label><input type="checkbox" name="include_eol" checked /> eol</label>
         <label><input type="checkbox" name="include_dependency_graph" checked /> dependency graph</label>

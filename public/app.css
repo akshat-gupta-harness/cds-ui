@@ -100,15 +100,21 @@ fieldset label { font-size: 14px; display: flex; gap: 6px; align-items: center; 
 .source.bad .stat { color: var(--bad); }
 .source.ok .stat { color: var(--good); }
 .source p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
-.cds .name { color: var(--cds); }
-.qwiet .name { color: var(--qwiet); }
+.v1 .name, .cds .name { color: var(--cds); }
+.v2 .name, .qwiet .name { color: var(--qwiet); }
+
+.live-panel { margin-top: 18px; }
+
+details.diffs { margin-top: 18px; }
+details.diffs > summary { cursor: pointer; }
+details.diffs > summary strong { font-weight: 620; }
 
 .toolbar {
   display: flex;
   gap: 12px;
   align-items: center;
-  justify-content: space-between;
-  margin: 18px 0 10px;
+  justify-content: flex-end;
+  margin: 10px 0;
   flex-wrap: wrap;
 }
 
@@ -140,8 +146,24 @@ fieldset label { font-size: 14px; display: flex; gap: 6px; align-items: center; 
 .metric .sub { display: block; color: var(--cds); margin-bottom: 2px; }
 
 .group { margin-top: 14px; }
-.group header { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.group header span { color: var(--muted); font-size: 12px; }
+.group > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  list-style: none;
+}
+.group > summary::-webkit-details-marker { display: none; }
+.group > summary::before {
+  content: "";
+  border-left: 5px solid var(--muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+.group[open] > summary::before { transform: rotate(90deg); }
+.group > summary h2 { flex: 1; }
+.group > summary .count { color: var(--muted); font-size: 12px; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { border-top: 1px solid var(--line); padding: 8px 10px; vertical-align: top; text-align: left; }
