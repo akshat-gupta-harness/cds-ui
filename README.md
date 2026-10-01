@@ -2,7 +2,7 @@
 
 Local debug page. Paste a PURL and show what differs across the sources you check.
 
-Mongo v1 (`componentEnrichment`), Mongo v2 (`componentEnrichmentV2`), Qwiet, and CDS are each optional. v1 and v2 start checked. Qwiet is the writer for v1; CDS is the writer for v2. A live checkbox compares CVE ids with the matching stored document when that Mongo side is also checked.
+Mongo v1 (`componentEnrichment`), Mongo v2 (`componentEnrichmentV2`), Qwiet, and CDS are each optional. v1 and v2 start checked. Qwiet is the writer for v1; CDS is the writer for v2. Checking both Mongo sides diffs those documents. Checking Qwiet and CDS diffs the two `package_info` payloads the same way, with Mongo left off. A live checkbox also compares CVE ids with the matching stored document when that Mongo side is checked.
 
 Credentials and service URLs stay in `.env` on the server. The browser only talks to localhost.
 

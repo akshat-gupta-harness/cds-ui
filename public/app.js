@@ -6,6 +6,7 @@ const out = document.querySelector("#out");
 
 const FIELD_ORDER = [
   "vulnerabilitydetails",
+  "cves",
   "licenses",
   "latestversion",
   "latestversionreleasedate",
@@ -88,18 +89,55 @@ function render(data) {
 
   if (data.v1 && data.v2) {
     if (!data.diffs) out.append(el("p", "lede", "Diff needs a document from both Mongo collections."));
-    else renderDiff(data);
+    else renderDiff(pairView(data, "mongo"));
+  }
+  if (data.qwiet && data.cds) {
+    if (!data.liveDiffs) out.append(el("p", "lede", "Diff needs a package from both Qwiet and CDS."));
+    else renderDiff(pairView(data, "live"));
   }
   if (data.v1 && data.qwiet) out.append(livePanel("Mongo v1 vs Qwiet", "CVE ids. Qwiet is the v1 writer.", data.ids.v1Cve, data.ids.qwiet, data.qwiet));
   if (data.v2 && data.cds) out.append(livePanel("Mongo v2 vs CDS", "CVE ids. CDS is the v2 writer.", data.ids.v2Cve, data.ids.cds, data.cds));
   out.append(rawDetails(data));
 }
 
-function renderDiff(data) {
-  const valueDiffs = data.diffs.filter((d) => d.kind === "value");
-  const shapeDiffs = data.diffs.filter((d) => d.kind === "shape");
-  out.append(cvePanel(data.ids, valueDiffs));
-  out.append(headline(data.v1.body, data.v2.body, valueDiffs));
+function pairView(data, kind) {
+  if (kind === "mongo") {
+    return {
+      purl: data.purl,
+      leftLabel: "Mongo v1",
+      rightLabel: "Mongo v2",
+      leftShort: "v1",
+      rightShort: "v2",
+      left: data.v1.body,
+      right: data.v2.body,
+      leftMeta: `${data.v1.found ? "found" : "missing"} in ${data.v1.ms}ms`,
+      rightMeta: `${data.v2.found ? "found" : "missing"} in ${data.v2.ms}ms`,
+      diffs: data.diffs,
+      leftIds: data.ids.v1,
+      rightIds: data.ids.v2,
+    };
+  }
+  return {
+    purl: data.purl,
+    leftLabel: "Qwiet",
+    rightLabel: "CDS",
+    leftShort: "qwiet",
+    rightShort: "cds",
+    left: data.qwietPackage,
+    right: data.cdsPackage,
+    leftMeta: `${data.qwiet.ok ? "ok" : "failed"} in ${data.qwiet.ms}ms`,
+    rightMeta: `${data.cds.ok ? "ok" : "failed"} in ${data.cds.ms}ms`,
+    diffs: data.liveDiffs,
+    leftIds: data.ids.qwietIds,
+    rightIds: data.ids.cdsIds,
+  };
+}
+
+function renderDiff(view) {
+  const valueDiffs = view.diffs.filter((d) => d.kind === "value");
+  const shapeDiffs = view.diffs.filter((d) => d.kind === "shape");
+  out.append(cvePanel(view, valueDiffs));
+  out.append(headline(view, valueDiffs));
 
   const block = el("details", "diffs");
   block.open = true;
@@ -133,18 +171,18 @@ function renderDiff(data) {
   out.append(block);
 
   const draw = () => {
-    const shown = data.diffs.filter((d) => {
+    const shown = view.diffs.filter((d) => {
       if (!shapeBox.checked && d.kind === "shape") return false;
       const q = filter.value.trim().toLowerCase();
       return !q || d.path.toLowerCase().includes(q);
     });
-    drawDiffs(list, shown);
+    drawDiffs(list, shown, view);
   };
   shapeBox.addEventListener("change", draw);
   filter.addEventListener("input", draw);
   copy.addEventListener("click", async () => {
-    const shown = data.diffs.filter((d) => shapeBox.checked || d.kind === "value");
-    await navigator.clipboard.writeText(markdown(data, shown));
+    const shown = view.diffs.filter((d) => shapeBox.checked || d.kind === "value");
+    await navigator.clipboard.writeText(markdown(view, shown));
     copy.textContent = "Copied";
     setTimeout(() => {
       copy.textContent = "Copy diff";
@@ -173,25 +211,29 @@ function sourceCard(name, cls, source) {
   return card;
 }
 
-function headline(left, right, valueDiffs) {
+function headline(view, valueDiffs) {
+  const left = view.left;
+  const right = view.right;
+  const leftMal = maliciousOf(left);
+  const rightMal = maliciousOf(right);
   const wrap = el("div", "headline");
-  wrap.append(metric("Vulns", countText(left), countText(left) !== countText(right), countText(right)));
-  wrap.append(metric("Licenses", join(left?.licenses), !sameList(left?.licenses, right?.licenses), join(right?.licenses)));
-  wrap.append(metric("Latest", left?.latestversion || "—", (left?.latestversion || "") !== (right?.latestversion || ""), right?.latestversion || "—"));
-  wrap.append(metric("Malicious", String(Boolean(left?.ismalicious)), Boolean(left?.ismalicious) !== Boolean(right?.ismalicious), String(Boolean(right?.ismalicious))));
-  wrap.append(metric("Deps", depText(left), depText(left) !== depText(right), depText(right)));
+  wrap.append(metric(view, "Vulns", countText(left), countText(left) !== countText(right), countText(right)));
+  wrap.append(metric(view, "Licenses", join(left?.licenses), !sameList(left?.licenses, right?.licenses), join(right?.licenses)));
+  wrap.append(metric(view, "Latest", latestOf(left) || "—", latestOf(left) !== latestOf(right), latestOf(right) || "—"));
+  wrap.append(metric(view, "Malicious", leftMal == null ? "—" : String(leftMal), leftMal !== rightMal, rightMal == null ? "—" : String(rightMal)));
+  wrap.append(metric(view, "Deps", depText(left), depText(left) !== depText(right), depText(right)));
   const fieldCount = new Set(valueDiffs.map((d) => d.path.split(/[.[]/)[0])).size;
   wrap.append(metric("Fields touched", String(fieldCount), fieldCount > 0, fieldCount ? "value diffs" : "match"));
   return wrap;
 }
 
-function cvePanel(ids, diffs) {
-  const report = idReport(ids.v1, ids.v2, diffs);
+function cvePanel(view, diffs) {
+  const report = idReport(view.leftIds, view.rightIds, diffs);
   const panel = el("section", "cve-panel");
   panel.append(el("h2", "", "Vulnerability ids"));
-  panel.append(el("p", "lede", `${report.left} on v1, ${report.right} on v2, ${report.shared} on both.`));
+  panel.append(el("p", "lede", `${report.left} on ${view.leftShort}, ${report.right} on ${view.rightShort}, ${report.shared} on both.`));
   const columns = el("div", "id-lists");
-  columns.append(idList("Only on v1", report.onlyLeft), idList("Only on v2", report.onlyRight));
+  columns.append(idList(`Only on ${view.leftShort}`, report.onlyLeft), idList(`Only on ${view.rightShort}`, report.onlyRight));
   panel.append(columns);
   appendFieldDiffs(panel, report.fieldDiffs);
   return panel;
@@ -259,17 +301,17 @@ function idReport(leftIds, rightIds, diffs) {
   };
 }
 
-function metric(label, leftText, differ, rightText) {
+function metric(view, label, leftText, differ, rightText) {
   const box = el("div", `metric${differ ? " diff" : ""}`);
   box.append(el("div", "k", label));
   const value = el("div", "v");
-  value.append(el("span", "sub", `v1  ${leftText}`));
-  value.append(document.createTextNode(`v2  ${rightText}`));
+  value.append(el("span", "sub", `${view.leftShort}  ${leftText}`));
+  value.append(document.createTextNode(`${view.rightShort}  ${rightText}`));
   box.append(value);
   return box;
 }
 
-function drawDiffs(container, diffs) {
+function drawDiffs(container, diffs, view) {
   container.replaceChildren();
   if (!diffs.length) {
     container.append(el("p", "empty", "No differences in this view."));
@@ -292,7 +334,7 @@ function drawDiffs(container, diffs) {
     const table = document.createElement("table");
     const thead = document.createElement("thead");
     const hr = document.createElement("tr");
-    for (const label of ["Path", "Mongo v1", "Mongo v2"]) hr.append(el("th", "", label));
+    for (const label of ["Path", view.leftLabel, view.rightLabel]) hr.append(el("th", "", label));
     thead.append(hr);
     table.append(thead);
     const tbody = document.createElement("tbody");
@@ -351,19 +393,19 @@ function jsonBlock(title, body) {
   return wrap;
 }
 
-function markdown(data, diffs) {
-  const report = idReport(data.ids.v1, data.ids.v2, diffs);
+function markdown(view, diffs) {
+  const report = idReport(view.leftIds, view.rightIds, diffs);
   const lines = [
-    `# ${data.purl}`,
+    `# ${view.purl}`,
     "",
-    `Mongo v1: ${data.v1.found ? "found" : "missing"} in ${data.v1.ms}ms`,
-    `Mongo v2: ${data.v2.found ? "found" : "missing"} in ${data.v2.ms}ms`,
+    `${view.leftLabel}: ${view.leftMeta}`,
+    `${view.rightLabel}: ${view.rightMeta}`,
     "",
-    `Vulnerability ids: ${report.left} on v1, ${report.right} on v2, ${report.shared} on both.`,
-    `Only on v1: ${report.onlyLeft.join(", ") || "none"}`,
-    `Only on v2: ${report.onlyRight.join(", ") || "none"}`,
+    `Vulnerability ids: ${report.left} on ${view.leftShort}, ${report.right} on ${view.rightShort}, ${report.shared} on both.`,
+    `Only on ${view.leftShort}: ${report.onlyLeft.join(", ") || "none"}`,
+    `Only on ${view.rightShort}: ${report.onlyRight.join(", ") || "none"}`,
     "",
-    `| Path | Mongo v1 | Mongo v2 |`,
+    `| Path | ${view.leftLabel} | ${view.rightLabel} |`,
     `| --- | --- | --- |`,
   ];
   for (const diff of diffs) {
@@ -395,13 +437,27 @@ function sameList(a, b) {
 
 function countText(doc) {
   const counts = doc?.vulnerabilitydetails;
-  if (!counts || counts.totalCount == null) return "—";
-  return String(counts.totalCount);
+  if (counts && counts.totalCount != null) return String(counts.totalCount);
+  if (Array.isArray(doc?.cves)) return String(doc.cves.length);
+  return "—";
+}
+
+function latestOf(doc) {
+  return doc?.latestversion || doc?.latestVersion || "";
+}
+
+function maliciousOf(doc) {
+  if (!doc) return null;
+  if ("ismalicious" in doc) return Boolean(doc.ismalicious);
+  if ("isMalicious" in doc) return Boolean(doc.isMalicious);
+  return null;
 }
 
 function depText(doc) {
-  if (doc?.directdependenciescount == null && doc?.transitivedependenciescount == null) return "—";
-  return `${doc.directdependenciescount ?? 0} direct / ${doc.transitivedependenciescount ?? 0} transitive`;
+  const direct = doc?.directdependenciescount ?? doc?.directDependenciesCount;
+  const trans = doc?.transitivedependenciescount ?? doc?.transitiveDependenciesCount;
+  if (direct == null && trans == null) return "—";
+  return `${direct ?? 0} direct / ${trans ?? 0} transitive`;
 }
 
 function when(ms) {
@@ -409,7 +465,8 @@ function when(ms) {
 }
 
 function rank(name) {
-  const i = FIELD_ORDER.indexOf(name);
+  const key = name.toLowerCase();
+  const i = FIELD_ORDER.findIndex((field) => field.toLowerCase() === key);
   return i === -1 ? FIELD_ORDER.length : i;
 }
 

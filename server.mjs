@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { diffValues, pickPackage } from "./lib/diff.mjs";
 import { loadEnv } from "./lib/env.mjs";
-import { cleanDoc, cveIds, packageCveIds, vulnerabilityIds } from "./lib/enrichment.mjs";
+import { cleanDoc, cveIds, packageCveIds, packageVulnerabilityIds, vulnerabilityIds } from "./lib/enrichment.mjs";
 import { loadEnrichment } from "./lib/mongo.mjs";
 import { callQwiet } from "./lib/upstream.mjs";
 
@@ -65,8 +65,8 @@ async function compare(req, res) {
     return;
   }
 
-  const wantV1 = payload.v1 !== false;
-  const wantV2 = payload.v2 !== false;
+  const wantV1 = payload.v1 === true;
+  const wantV2 = payload.v2 === true;
   const wantCds = Boolean(payload.cds);
   const wantQwiet = Boolean(payload.qwiet);
   if (!wantV1 && !wantV2 && !wantCds && !wantQwiet) {
@@ -107,6 +107,7 @@ async function compare(req, res) {
   const cdsPackage = cds?.body == null ? null : pickPackage(cds.body, purl);
   const qwietPackage = qwiet?.body == null ? null : pickPackage(qwiet.body, purl);
   const diffs = v1?.body != null && v2?.body != null ? diffValues(v1.body, v2.body) : null;
+  const liveDiffs = qwietPackage != null && cdsPackage != null ? diffValues(qwietPackage, cdsPackage) : null;
 
   sendJSON(res, 200, {
     purl,
@@ -114,6 +115,7 @@ async function compare(req, res) {
     v1,
     v2,
     diffs,
+    liveDiffs,
     cds,
     qwiet,
     cdsPackage,
@@ -125,6 +127,8 @@ async function compare(req, res) {
       v2Cve: wantV2 ? cveIds(v2.body) : null,
       cds: wantCds ? packageCveIds(cdsPackage) : null,
       qwiet: wantQwiet ? packageCveIds(qwietPackage) : null,
+      cdsIds: wantCds ? packageVulnerabilityIds(cdsPackage) : null,
+      qwietIds: wantQwiet ? packageVulnerabilityIds(qwietPackage) : null,
     },
   });
 }
